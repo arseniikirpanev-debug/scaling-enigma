@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Counter-Strike 2D HTML5</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #222;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+            user-select: none;
+        }
+        #ui {
+            width: 800px;
+            display: flex;
+            justify-content: space-between;
+            padding: 10px;
+            background: #333;
+            border: 2px solid #555;
+            border-bottom: none;
+            font-size: 18px;
+            font-weight: bold;
+        }
+        canvas {
+            background-color: #4b5320; /* Военный зеленый цвет карты */
+            border: 2px solid #555;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            cursor: crosshair;
+        }
+        #controls {
+            margin-top: 10px;
+            text-align: center;
+            color: #aaa;
+            font-size: 14px;
+        }
+        .hud-red { color: #ff4d4d; }
+        .hud-green { color: #4dff4d; }
+        .hud-yellow { color: #ffff4d; }
+    </style>
+</head>
+<body>
+
+    <div id="ui">
+        <div>ЗДОРОВЬЕ: <span id="hp" class="hud-green">100</span></div>
+        <div>ПАТРОНЫ: <span id="ammo" class="hud-yellow">30/∞</span> <span id="reload-status"></span></div>
+        <div>УБИЙСТВА: <span id="score" class="hud-red">0</span></div>
+    </div>
+
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+
+    <div id="controls">
+        Управление: <b>W, A, S, D</b> — Движение | <b>Мышь</b> — Прицеливание | <b>Левый клик</b> — Стрельба | <b>R</b> — Перезарядка
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Элементы UI
+        const hpEl = document.getElementById('hp');
+        const ammoEl = document.getElementById('ammo');
+        const scoreEl = document.getElementById('score');
+        const reloadEl = document.getElementById('reload-status');
+
+        // Игровое состояние
+        let score = 0;
+        let gameOver = false;
+
+        // Настройки Игрока (Спецназ)
+        const player = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            radius: 15,
+            color: '#3b5998', 
+            speed: 4,
+            hp: 100,
+            maxAmmo: 30,
+            ammo: 30,
+            isReloading: false,
+            reloadTimer: 0,
+            reloadTime: 120, 
+            angle: 0
+        };
+
+        // Клавиатура и Мышь
+        const keys = {};
+        const mouse = { x: 0, y: 0 };
+
+        // Массивы для объектов
+        const bullets = [];
+        const enemies = [];
+        // Класс Врага (Террористы)
+        class Enemy {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.radius = 15;
+                this.color = '#de5246'; // Красный
+                this.speed = 1.5 + Math.random() * 1.5; 
+                this.hp = 100;
+                this.damage = 1; // Урон игроку за кадр при контакте
+            }
+
+            update() {
+                // Движение в сторону игрока
+                let dx = player.x - this.x;
+                let dy = player.y - this.y;
+                let dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist > 5) {
+                    this.x += (dx / dist) * this.speed;
+                    this.y += (dy / dist) * this.speed;
+                }
+
+                // Атака игрока при столкновении
+                if (dist < this.radius + player.radius) {
+                    player.hp -= this.damage;
+                    if (player.hp <= 0) {
+                        player.hp = 0;
+                        gameOver = true;
+                    }
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = '#000';
+                ctx.stroke();
+                ctx.closePath();
+                ctx.restore();
+            }
+        }
+
+        // Класс Пули
+        class Bullet {
+            constructor(x, y, angle) {
+                this.x = x;
+                this.y = y;
+                this.radius = 4;
+                this.speed = 12;
+                this.dx = Math.cos(angle) * this.speed;
+                this.dy = Math.sin(angle) * this.speed;
+            }
+
+            update() {
+                this.x += this.dx;
+                this.y += this.dy;
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = '#ffcc00'; // Желтый трассер
+                ctx.fill();
+                ctx.closePath();
+            }
+        }
+
+        // Случайный спавн врагов за пределами экрана
+        function spawnEnemy() {
+            if (gameOver) return;
+            
+            let x, y;
+            if (Math.random() < 0.5) {
+                x = Math.random() < 0.5 ? -30 : canvas.width + 30;
+                y = Math.random() * canvas.height;
+            } else {
+                x = Math.random() * canvas.width;
+                y = Math.random() < 0.5 ? -30 : canvas.height + 30;
+            }
+            
+            enemies.push(new Enemy(x, y));
+            
+            let nextSpawn = 2000 - score * 50;
+            setTimeout(spawnEnemy, Math.max(500, nextSpawn));
+        }
+                  // Слушатели событий (Ввод)
+        window.addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; });
+        window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+        
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = e.clientX - rect.left;
+            mouse.y = e.clientY - rect.top;
+        });
+
+        canvas.addEventListener('mousedown', () => {
+            if (gameOver) return;
+            
+            if (player.ammo > 0 && !player.isReloading) {
+                bullets.push(new Bullet(player.x, player.y, player.angle));
+                player.ammo--;
+            } else if (player.ammo === 0 && !player.isReloading) {
+                startReload();
+            }
+        });
+
+        function startReload() {
+            if (player.isReloading || player.ammo === player.maxAmmo) return;
+            player.isReloading = true;
+            player.reloadTimer = player.reloadTime;
+        }
+
+        // Обновление логики игры
+        function update() {
+            if (gameOver) return;
+
+            // Движение игрока
+            if (keys['w'] || keys['ц']) player.y -= player.speed;
+            if (keys['s'] || keys['ы']) player.y += player.speed;
+            if (keys['a'] || keys['ф']) player.x -= player.speed;
+            if (keys['d'] || keys['в']) player.x += player.speed;
+
+            player.x = Math.max(player.radius, Math.min(canvas.width - player.radius, player.x));
+            player.y = Math.max(player.radius, Math.min(canvas.height - player.radius, player.y));
+
+            player.angle = Math.atan2(mouse.y - player.y, mouse.x - player.x);
+
+            if (keys['r'] || keys['к']) {
+                startReload();
+            }
+
+            if (player.isReloading) {
+                player.reloadTimer--;
+                if (player.reloadTimer <= 0) {
+                    player.ammo = player.maxAmmo;
+                    player.isReloading = false;
+                }
+            }
+
+            // Обновление пуль
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                bullets[i].update();
+                if (bullets[i].x < 0 || bullets[i].x > canvas.width || bullets[i].y < 0 || bullets[i].y > canvas.height) {
+                    bullets.splice(i, 1);
+                }
+            }
+
+            // Обновление врагов и попадания
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                enemies[i].update();
+
+                for (let j = bullets.length - 1; j >= 0; j--) {
+                    let dx = bullets[j].x - enemies[i].x;
+                    let dy = bullets[j].y - enemies[i].y;
+                    let dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist < enemies[i].radius + bullets[j].radius) {
+                        enemies[i].hp -= 50; 
+                        bullets.splice(j, 1); 
+
+                        if (enemies[i].hp <= 0) {
+                            enemies.splice(i, 1); 
+                            score++;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Обновление UI
+            hpEl.innerText = player.hp;
+            if (player.hp < 40) hpEl.className = "hud-red";
+            else hpEl.className = "hud-green";
+
+            ammoEl.innerText = `${player.ammo}/${player.maxAmmo}`;
+            reloadEl.innerText = player.isReloading ? " (ПЕРЕЗАРЯДКА...)" : "";
+            scoreEl.innerText = score;
+        }
+
+        // Отрисовка
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Отрисовка сетки карты
+            ctx.strokeStyle = '#555d26';
+            ctx.lineWidth = 1;
+            for(let x = 0; x < canvas.width; x += 40) {
+                ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+            }
+            for(let y = 0; y < canvas.height; y += 40) {
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+            }
+
+            bullets.forEach(b => b.draw());
+            enemies.forEach(e => e.draw());
+
+            // Отрисовка игрока и оружия
+            ctx.save();
+            ctx.translate(player.x, player.y);
+            ctx.rotate(player.angle);
+
+            ctx.fillStyle = '#111';
+            ctx.fillRect(0, -4, 25, 8); // Дуло
+
+            ctx.beginPath();
+            ctx.arc(0, 0, player.radius, 0, Math.PI * 2);
+            ctx.fillStyle = player.color;
+            ctx.fill();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#000';
+            ctx.stroke();
+            ctx.closePath();
+
+            ctx.restore();
+
+            // Экран окончания игры
+            if (gameOver) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                ctx.fillStyle = '#ff4d4d';
+                ctx.font = 'bold 48px Courier New';
+                ctx.textAlign = 'center';
+                ctx.fillText('ВЫ ПОГИБЛИ', canvas.width / 2, canvas.height / 2 - 20);
+                
+                ctx.fillStyle = '#fff';
+                ctx.font = '20px Courier New';
+                ctx.fillText(`Ваш счёт: ${score}`, canvas.width / 2, canvas.height / 2 + 30);
+                ctx.fillText('Обновите страницу для перезапуска', canvas.width / 2, canvas.height / 2 + 70);
+            }
+        }
+
+        // Запуск игрового цикла
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        spawnEnemy();
+        gameLoop();
+    </script>
+</body>
+</html>
